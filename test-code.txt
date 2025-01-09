@@ -1,9 +1,8 @@
-
 name: Sync Selected Directories to Private Repo
 
 on:
-  #schedule:
-  #  - cron: '0 * * * *'  # Runs every hour
+  schedule:
+    - cron: '0 * * * *'  # Runs every hour
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
@@ -38,24 +37,25 @@ jobs:
     - name: Load Subdirectories Configuration
       id: load-config
       run: |
-        CONFIG_FILE="sync-config.json"
+        CONFIG_FILE="private-repo/sync-config.json"
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "Configuration file not found!"
           exit 1
         fi
-        SUBDIRECTORIES=$(jq -r '.subdirectories[]' $CONFIG_FILE)
-        echo "subdirectories=$SUBDIRECTORIES" >> $GITHUB_ENV
+        jq -r '.subdirectories[]' "$CONFIG_FILE" > subdirectories.txt
+      shell: bash
 
     # Step 4: Fetch latest commit hashes for specific subdirectories in the public repo
     - name: Fetch Latest Commit Hashes
       id: fetch-hashes
       run: |
         cd public-repo
-        for SUBDIR in ${{ env.subdirectories }}; do
-          DIR_NAME=$(basename "$SUBDIR")
+        while IFS= read -r SUBDIR; do
+          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
           HASH=$(git log -n 1 --pretty=format:"%H" -- "$SUBDIR" || echo "NO_COMMIT")
-          echo "$DIR_NAME=$HASH" >> $GITHUB_ENV
-        done
+          echo "${SANITIZED_NAME}=$HASH" >> $GITHUB_ENV
+        done < ../subdirectories.txt
+      shell: bash
 
     # Step 5: Compare hashes, create missing directories, and detect changes
     - name: Check for New Commits and Ensure Directories Exist
@@ -64,11 +64,11 @@ jobs:
         cd private-repo
         mkdir -p hashes
         CHANGES_DETECTED=false
-        for SUBDIR in ${{ env.subdirectories }}; do
-          DIR_NAME=$(basename "$SUBDIR")
-          ENV_KEY=$DIR_NAME
-          PUBLIC_HASH=$(printenv "$ENV_KEY")
-          PRIVATE_HASH=$(cat hashes/"$ENV_KEY".hash 2>/dev/null || echo "NO_COMMIT")
+        while IFS= read -r SUBDIR; do
+          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
+          PUBLIC_HASH=$(printenv "$SANITIZED_NAME")
+          PRIVATE_HASH=$(cat hashes/"$SANITIZED_NAME".hash 2>/dev/null || echo "NO_COMMIT")
+          DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
           echo "Subdirectory: $DIR_NAME"
           echo "Public Hash: $PUBLIC_HASH"
           echo "Private Hash: $PRIVATE_HASH"
@@ -84,23 +84,24 @@ jobs:
             echo "Hash mismatch for $DIR_NAME. Changes detected."
             CHANGES_DETECTED=true
           fi
-        done
+        done < ../subdirectories.txt
 
         echo "changes_detected=$CHANGES_DETECTED" >> $GITHUB_ENV
+      shell: bash
 
     # Step 6: Sync changes (only if new commits are detected)
     - name: Sync Changes
       if: env.changes_detected == 'true'
       run: |
         cd private-repo
-        for SUBDIR in ${{ env.subdirectories }}; do
-          DIR_NAME=$(basename "$SUBDIR")
-          ENV_KEY=$DIR_NAME
-          PUBLIC_HASH=$(printenv "$ENV_KEY")
+        while IFS= read -r SUBDIR; do
+          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
+          PUBLIC_HASH=$(printenv "$SANITIZED_NAME")
+          DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
           rsync -av --delete --exclude='.git' ../public-repo/"$SUBDIR"/ "$DIR_NAME"/
-          mkdir -p $(dirname hashes/"$ENV_KEY".hash)
-          echo "$PUBLIC_HASH" > hashes/"$ENV_KEY".hash
-        done
+          mkdir -p $(dirname hashes/"$SANITIZED_NAME".hash)
+          echo "$PUBLIC_HASH" > hashes/"$SANITIZED_NAME".hash
+        done < ../subdirectories.txt
 
         # Commit and push changes
         git config user.name "github-actions[bot]"
@@ -108,3 +109,4 @@ jobs:
         git add .
         git commit -m "Sync selected directories with latest updates from Public Repo" || echo "No changes to commit"
         git push origin main  # Adjust to your branch name
+      shell: bash
