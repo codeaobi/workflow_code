@@ -1,0 +1,19 @@
+For a no-code approach, Azure Logic Apps can be used.
+
+Steps:
+Create a Logic App in Azure
+
+Go to Azure Portal → Logic Apps → Create a new Logic App.
+Set Up a Recurring Trigger
+
+Add a Schedule Trigger → Set it to run every 24 hours.
+Add GitHub as a Data Source
+
+Connect to GitHub using your credentials.
+Use the "Get repository content" action to fetch files.
+Upload to Azure Blob
+
+Use the "Create Blob" action to upload the files.
+Save and Activate the Logic App
+
+Azure will now fetch and upload the repository data daily.
