@@ -24,15 +24,25 @@ jobs:
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
+      - name: Debug Azure Account & Storage
+        run: |
+          az account show
+          az storage account list --query "[].{name:name}" --output table
+
       - name: Check if Storage Account Exists
         id: check_storage
         run: |
-          STORAGE_ACCOUNT_EXISTS=$(az storage account check-name --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" --query "nameAvailable" --output tsv)
-          echo "Storage Account Exists: $STORAGE_ACCOUNT_EXISTS"
-          echo "storage_exists=$STORAGE_ACCOUNT_EXISTS" >> $GITHUB_ENV
+          STORAGE_ACCOUNT_EXISTS=$(az storage account list --query "[?name=='${{ secrets.AZURE_STORAGE_ACCOUNT }}'].name" --output tsv)
+          if [[ -z "$STORAGE_ACCOUNT_EXISTS" ]]; then
+            echo "Storage account does NOT exist."
+            echo "storage_exists=false" >> $GITHUB_ENV
+          else
+            echo "Storage account exists."
+            echo "storage_exists=true" >> $GITHUB_ENV
+          fi
 
       - name: Create Storage Account (If Not Exists)
-        if: env.storage_exists == 'true'
+        if: env.storage_exists == 'false'
         run: |
           az storage account create \
             --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
