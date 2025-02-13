@@ -55,19 +55,31 @@ jobs:
             --sku Standard_LRS
           echo "Storage Account Created!"
 
-      - name: Create Blob Container (If Not Exists)
+      - name: Get Storage Account Key (If Storage Account Exists)
+        if: env.storage_exists == 'true'
+        run: |
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "[0].value" --output tsv)
+          echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
+
+      - name: Create Blob Container (If Not Exists) with Authentication
+        if: env.storage_exists == 'true'
         run: |
           az storage container create \
             --name mycontainer \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}"
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --account-key "$STORAGE_KEY"
 
       - name: Zip Repository
         run: zip -r repo.zip .
 
-      - name: Upload to Azure Blob
+      - name: Upload to Azure Blob with Authentication
         run: |
           az storage blob upload \
             --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --account-key "$STORAGE_KEY" \
             --container-name mycontainer \
             --file repo.zip \
             --name repo.zip \
