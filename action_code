@@ -1,4 +1,4 @@
-name: Upload GitHub Repo to Azure Blob
+name: Check & Upload to Azure Storage
 
 on:
   schedule:
@@ -6,30 +6,54 @@ on:
   workflow_dispatch:  # Allows manual execution
 
 jobs:
-  upload:
+  check-create-upload:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Verify Repository Files
-        run: ls -lah
-
       - name: Install Azure CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+
+      - name: Check if Storage Account Exists
+        id: check_storage
+        run: |
+          STORAGE_ACCOUNT_EXISTS=$(az storage account check-name --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" --query "nameAvailable" --output tsv)
+          echo "Storage Account Exists: $STORAGE_ACCOUNT_EXISTS"
+          echo "storage_exists=$STORAGE_ACCOUNT_EXISTS" >> $GITHUB_ENV
+
+      - name: Create Storage Account (If Not Exists)
+        if: env.storage_exists == 'true'
+        run: |
+          az storage account create \
+            --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --location "${{ secrets.AZURE_LOCATION }}" \
+            --sku Standard_LRS
+          echo "Storage Account Created!"
+
+      - name: Create Blob Container (If Not Exists)
+        run: |
+          az storage container create \
+            --name mycontainer \
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}"
+
       - name: Zip Repository
         run: zip -r repo.zip .
 
-      - name: Verify Zip File Exists
-        run: ls -lah repo.zip
-
-      - name: Upload to Azure Blob (Using Connection String)
+      - name: Upload to Azure Blob
         run: |
           az storage blob upload \
-            --connection-string "${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
             --container-name mycontainer \
             --file repo.zip \
             --name repo.zip \
