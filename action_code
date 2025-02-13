@@ -55,17 +55,17 @@ jobs:
             --sku Standard_LRS
           echo "Storage Account Created!"
 
-      - name: Get Storage Account Key (If Storage Account Exists)
-        if: env.storage_exists == 'true'
+      - name: Get Storage Account Key
+        id: get_storage_key
         run: |
           STORAGE_KEY=$(az storage account keys list \
             --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "[0].value" --output tsv)
+          echo "::add-mask::$STORAGE_KEY"  # Mask the key in logs for security
           echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
 
       - name: Create Blob Container (If Not Exists) with Authentication
-        if: env.storage_exists == 'true'
         run: |
           az storage container create \
             --name mycontainer \
