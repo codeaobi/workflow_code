@@ -1,60 +1,7 @@
-name: Check & Upload to Azure Storage
-
-on:
-  schedule:
-    - cron: "0 0 * * *"  # Runs every 24 hours at midnight UTC
-  workflow_dispatch:  # Allows manual execution
-
-jobs:
-  check-create-upload:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install Azure CLI
-        run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-      - name: Azure Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
-
-      - name: Check if Storage Account Exists
-        id: check_storage
-        run: |
-          STORAGE_ACCOUNT_EXISTS=$(az storage account check-name --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" --query "nameAvailable" --output tsv)
-          echo "Storage Account Exists: $STORAGE_ACCOUNT_EXISTS"
-          echo "storage_exists=$STORAGE_ACCOUNT_EXISTS" >> $GITHUB_ENV
-
-      - name: Create Storage Account (If Not Exists)
-        if: env.storage_exists == 'true'
-        run: |
-          az storage account create \
-            --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --location "${{ secrets.AZURE_LOCATION }}" \
-            --sku Standard_LRS
-          echo "Storage Account Created!"
-
-      - name: Create Blob Container (If Not Exists)
-        run: |
-          az storage container create \
-            --name mycontainer \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}"
-
-      - name: Zip Repository
-        run: zip -r repo.zip .
-
-      - name: Upload to Azure Blob
-        run: |
-          az storage blob upload \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
-            --container-name mycontainer \
-            --file repo.zip \
-            --name repo.zip \
-            --overwrite true
+WARNING: 
+Skip querying account key due to failure: Storage account '***' not found.
+ERROR: Server failed to authenticate the request. Please refer to the information in the www-authenticate header.
+RequestId:881cb335-401e-00bc-2910-7e33bb000000
+Time:2025-02-13T12:15:34.3605144Z
+ErrorCode:NoAuthenticationInformation
+Error: Process completed with exit code 1.
