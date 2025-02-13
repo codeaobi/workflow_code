@@ -24,6 +24,10 @@ jobs:
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
+      - name: Set Correct Azure Subscription
+        run: |
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
       - name: Debug Azure Account & Storage
         run: |
           az account show
