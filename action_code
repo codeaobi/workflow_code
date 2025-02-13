@@ -1,4 +1,4 @@
-name: Upload to Azure Blob
+name: Upload GitHub Repo to Azure Blob
 
 on:
   schedule:
@@ -8,18 +8,29 @@ on:
 jobs:
   upload:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Verify Repository Files
+        run: ls -lah
 
       - name: Install Azure CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-      - name: Login to Azure
-        run: az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+      - name: Zip Repository
+        run: zip -r repo.zip .
 
-      - name: Upload Repository to Azure Blob
+      - name: Verify Zip File Exists
+        run: ls -lah repo.zip
+
+      - name: Upload to Azure Blob (Using Connection String)
         run: |
-          zip -r repo.zip .  # Compress the repo
-          az storage blob upload --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} --container-name mycontainer --file repo.zip --name repo.zip --overwrite true
+          az storage blob upload \
+            --connection-string "${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+            --container-name mycontainer \
+            --file repo.zip \
+            --name repo.zip \
+            --overwrite true
