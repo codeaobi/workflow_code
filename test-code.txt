@@ -1,13 +1,13 @@
-name: Sync Selected Directories to Private Repo
+name: Sync Selected Directories Between Private Repos
 
 on:
   schedule:
     - cron: '0 * * * *'  # Runs every hour
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:  # Allows manual trigger
 
 permissions:
-  actions: write
   contents: write
+  actions: write
   deployments: read
   repository-projects: read
   statuses: read
@@ -17,27 +17,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout the public repository
-    - name: Checkout Public Repository
+    # Step 1: Checkout Private Repository A (Source)
+    - name: Checkout Source Repository (Repo A)
       uses: actions/checkout@v3
       with:
-        repository: Azure/Azure-Sentinel
-        path: public-repo
+        repository: org-name/private-repo-A  # Update with correct repo A
+        token: ${{ secrets.PAT_FOR_REPO_A }}
+        path: source-repo
 
-    # Step 2: Checkout the private repository
-    - name: Checkout Private Repository
+    # Step 2: Checkout Private Repository B (Destination)
+    - name: Checkout Destination Repository (Repo B)
       uses: actions/checkout@v3
       with:
-        repository: codeaobi/test_private_repo
-        ref: main  # Adjust to the correct branch name
-        token: ${{ secrets.MY_PAT }}
-        path: private-repo
+        repository: org-name/private-repo-B  # Update with correct repo B
+        token: ${{ secrets.PAT_FOR_REPO_B }}
+        ref: main  # Adjust to the correct branch
+        path: destination-repo
 
     # Step 3: Load Configuration File
     - name: Load Subdirectories Configuration
       id: load-config
       run: |
-        CONFIG_FILE="private-repo/sync-config.json"
+        CONFIG_FILE="destination-repo/sync-config.json"
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "Configuration file not found!"
           exit 1
@@ -45,11 +46,11 @@ jobs:
         jq -r '.subdirectories[]' "$CONFIG_FILE" > subdirectories.txt
       shell: bash
 
-    # Step 4: Fetch latest commit hashes for specific subdirectories in the public repo
+    # Step 4: Fetch latest commit hashes for specific subdirectories in Repo A
     - name: Fetch Latest Commit Hashes
       id: fetch-hashes
       run: |
-        cd public-repo
+        cd source-repo
         while IFS= read -r SUBDIR; do
           SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
           HASH=$(git log -n 1 --pretty=format:"%H" -- "$SUBDIR" || echo "NO_COMMIT")
@@ -61,17 +62,17 @@ jobs:
     - name: Check for New Commits and Ensure Directories Exist
       id: check-commits
       run: |
-        cd private-repo
+        cd destination-repo
         mkdir -p hashes
         CHANGES_DETECTED=false
         while IFS= read -r SUBDIR; do
           SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
-          PUBLIC_HASH=$(printenv "$SANITIZED_NAME")
-          PRIVATE_HASH=$(cat hashes/"$SANITIZED_NAME".hash 2>/dev/null || echo "NO_COMMIT")
+          SOURCE_HASH=$(printenv "$SANITIZED_NAME")
+          DEST_HASH=$(cat hashes/"$SANITIZED_NAME".hash 2>/dev/null || echo "NO_COMMIT")
           DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
           echo "Subdirectory: $DIR_NAME"
-          echo "Public Hash: $PUBLIC_HASH"
-          echo "Private Hash: $PRIVATE_HASH"
+          echo "Source Repo Hash: $SOURCE_HASH"
+          echo "Destination Repo Hash: $DEST_HASH"
 
           # Ensure directory exists
           if [ ! -d "$DIR_NAME" ]; then
@@ -80,7 +81,7 @@ jobs:
           fi
 
           # Check for changes
-          if [ "$PUBLIC_HASH" != "$PRIVATE_HASH" ]; then
+          if [ "$SOURCE_HASH" != "$DEST_HASH" ]; then
             echo "Hash mismatch for $DIR_NAME. Changes detected."
             CHANGES_DETECTED=true
           fi
@@ -93,20 +94,20 @@ jobs:
     - name: Sync Changes
       if: env.changes_detected == 'true'
       run: |
-        cd private-repo
+        cd destination-repo
         while IFS= read -r SUBDIR; do
           SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
-          PUBLIC_HASH=$(printenv "$SANITIZED_NAME")
+          SOURCE_HASH=$(printenv "$SANITIZED_NAME")
           DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
-          rsync -av --delete --exclude='.git' ../public-repo/"$SUBDIR"/ "$DIR_NAME"/
+          rsync -av --delete --exclude='.git' ../source-repo/"$SUBDIR"/ "$DIR_NAME"/
           mkdir -p $(dirname hashes/"$SANITIZED_NAME".hash)
-          echo "$PUBLIC_HASH" > hashes/"$SANITIZED_NAME".hash
+          echo "$SOURCE_HASH" > hashes/"$SANITIZED_NAME".hash
         done < ../subdirectories.txt
 
         # Commit and push changes
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add .
-        git commit -m "Sync selected directories with latest updates from Public Repo" || echo "No changes to commit"
+        git commit -m "Sync selected directories with latest updates from Repo A" || echo "No changes to commit"
         git push origin main  # Adjust to your branch name
       shell: bash
