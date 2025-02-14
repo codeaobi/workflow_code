@@ -17,6 +17,13 @@ jobs:
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
+      - name: Read Config File
+        run: |
+          STORAGE_ACCOUNT=$(jq -r '.AZURE_STORAGE_ACCOUNT' config.json)
+          LOCATION=$(jq -r '.AZURE_LOCATION' config.json)
+          echo "AZURE_STORAGE_ACCOUNT=$STORAGE_ACCOUNT" >> $GITHUB_ENV
+          echo "AZURE_LOCATION=$LOCATION" >> $GITHUB_ENV
+
       - name: Azure Login
         run: |
           az login --service-principal \
@@ -36,7 +43,7 @@ jobs:
       - name: Check if Storage Account Exists
         id: check_storage
         run: |
-          STORAGE_ACCOUNT_EXISTS=$(az storage account list --query "[?name=='${{ secrets.AZURE_STORAGE_ACCOUNT }}'].name" --output tsv)
+          STORAGE_ACCOUNT_EXISTS=$(az storage account list --query "[?name=='${{ env.AZURE_STORAGE_ACCOUNT }}'].name" --output tsv)
           if [[ -z "$STORAGE_ACCOUNT_EXISTS" ]]; then
             echo "Storage account does NOT exist."
             echo "storage_exists=false" >> $GITHUB_ENV
@@ -49,9 +56,9 @@ jobs:
         if: env.storage_exists == 'false'
         run: |
           az storage account create \
-            --name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --location "${{ secrets.AZURE_LOCATION }}" \
+            --location "${{ env.AZURE_LOCATION }}" \
             --sku Standard_LRS
           echo "Storage Account Created!"
 
@@ -59,7 +66,7 @@ jobs:
         id: get_storage_key
         run: |
           STORAGE_KEY=$(az storage account keys list \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "[0].value" --output tsv)
           echo "::add-mask::$STORAGE_KEY"  # Mask the key in logs for security
@@ -69,18 +76,23 @@ jobs:
         run: |
           az storage container create \
             --name mycontainer \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --account-key "$STORAGE_KEY"
 
       - name: Zip Repository
         run: zip -r repo.zip .
 
+      - name: Generate File Name with Timestamp
+        run: |
+          TIMESTAMP=$(date +%s)
+          echo "BLOB_NAME=repo_$TIMESTAMP.zip" >> $GITHUB_ENV
+
       - name: Upload to Azure Blob with Authentication
         run: |
           az storage blob upload \
-            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT }}" \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --account-key "$STORAGE_KEY" \
             --container-name mycontainer \
             --file repo.zip \
-            --name repo.zip \
+            --name "${{ env.BLOB_NAME }}" \
             --overwrite true
