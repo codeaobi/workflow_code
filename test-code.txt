@@ -28,8 +28,8 @@ jobs:
     - name: Checkout Private Repository
       uses: actions/checkout@v3
       with:
-        repository: codeaobi/test_private_repo
-        ref: main  # Adjust to the correct branch name
+        repository: mxdr-verizon-org-v6-tpd/MonitorTestRepo
+        ref: content_test_sync  # Adjust to the correct branch name
         token: ${{ secrets.MY_PAT }}
         path: private-repo
 
@@ -108,5 +108,5 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add .
         git commit -m "Sync selected directories with latest updates from Public Repo" || echo "No changes to commit"
-        git push origin main  # Adjust to your branch name
+        git push origin content_test_sync  # Adjust to your branch name
       shell: bash
