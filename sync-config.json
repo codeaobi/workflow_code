@@ -1,6 +1,4 @@
 {
-  "subdirectories": [
-    "Solutions/Amazon Web Services",
-    "Solutions/Cisco ACI"
-  ]
+  "AZURE_STORAGE_ACCOUNT": "yourstorageaccount",
+  "AZURE_LOCATION": "eastus"
 }
