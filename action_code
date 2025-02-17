@@ -1,4 +1,4 @@
-name: Check & Upload to Azure Storage
+name: Check & Upload Private Repo to Azure Storage
 
 on:
   schedule:
@@ -10,49 +10,68 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      # Step 1: Checkout Workflow Repository (Contains config.json)
+      - name: Checkout Workflow Repository
         uses: actions/checkout@v4
 
+      # Step 2: Install Azure CLI
       - name: Install Azure CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
+      # Step 3: Read Config File (Azure & Private Repo Details)
       - name: Read Config File
         run: |
           STORAGE_ACCOUNT=$(jq -r '.AZURE_STORAGE_ACCOUNT' config.json)
           LOCATION=$(jq -r '.AZURE_LOCATION' config.json)
+          CONTAINER_NAME=$(jq -r '.AZURE_CONTAINER_NAME // "mycontainer"' config.json)  # Default if missing
+          PRIVATE_REPO=$(jq -r '.PRIVATE_REPO' config.json)
+          PRIVATE_BRANCH=$(jq -r '.PRIVATE_BRANCH' config.json)
+
           echo "AZURE_STORAGE_ACCOUNT=$STORAGE_ACCOUNT" >> $GITHUB_ENV
           echo "AZURE_LOCATION=$LOCATION" >> $GITHUB_ENV
+          echo "AZURE_CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_ENV
+          echo "PRIVATE_REPO=$PRIVATE_REPO" >> $GITHUB_ENV
+          echo "PRIVATE_BRANCH=$PRIVATE_BRANCH" >> $GITHUB_ENV
 
+      # Step 4: Checkout Private Repository
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ env.PRIVATE_BRANCH }}
+          token: ${{ secrets.MY_PAT }}
+          path: private-repo
+          fetch-depth: 1  # Optimized checkout
+
+      # Step 5: Azure Login
       - name: Azure Login
         run: |
           az login --service-principal \
             -u "${{ secrets.AZURE_CLIENT_ID }}" \
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+            --tenant "${{ secrets.AZURE_TENANT_ID }}" \
+            --allow-no-subscriptions
 
-      - name: Set Correct Azure Subscription
+      # Step 6: Set Correct Azure Subscription
+      - name: Set Azure Subscription
         run: |
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Debug Azure Account & Storage
-        run: |
-          az account show
-          az storage account list --query "[].{name:name}" --output table
-
-      - name: Check if Storage Account Exists
+      # Step 7: Check If Storage Account Exists
+      - name: Check Storage Account
         id: check_storage
         run: |
-          STORAGE_ACCOUNT_EXISTS=$(az storage account list --query "[?name=='${{ env.AZURE_STORAGE_ACCOUNT }}'].name" --output tsv)
+          STORAGE_ACCOUNT_EXISTS=$(az storage account show --name "${{ env.AZURE_STORAGE_ACCOUNT }}" --query "name" --output tsv || echo "")
           if [[ -z "$STORAGE_ACCOUNT_EXISTS" ]]; then
-            echo "Storage account does NOT exist."
+            echo "Storage account does NOT exist. Creating it..."
             echo "storage_exists=false" >> $GITHUB_ENV
           else
             echo "Storage account exists."
             echo "storage_exists=true" >> $GITHUB_ENV
-          fi
 
-      - name: Create Storage Account (If Not Exists)
+      # Step 8: Create Storage Account (If Not Exists)
+      - name: Create Storage Account
         if: env.storage_exists == 'false'
         run: |
           az storage account create \
@@ -60,8 +79,8 @@ jobs:
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --location "${{ env.AZURE_LOCATION }}" \
             --sku Standard_LRS
-          echo "Storage Account Created!"
 
+      # Step 9: Get Storage Account Key
       - name: Get Storage Account Key
         id: get_storage_key
         run: |
@@ -69,30 +88,41 @@ jobs:
             --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "[0].value" --output tsv)
-          echo "::add-mask::$STORAGE_KEY"  # Mask the key in logs for security
+          echo "::add-mask::$STORAGE_KEY"
           echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
 
-      - name: Create Blob Container (If Not Exists) with Authentication
+      # Step 10: Create Blob Container (If Not Exists)
+      - name: Create Blob Container
         run: |
           az storage container create \
-            --name mycontainer \
+            --name "${{ env.AZURE_CONTAINER_NAME }}" \
             --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --account-key "$STORAGE_KEY"
 
-      - name: Zip Repository
-        run: zip -r repo.zip .
+      # Step 11: Zip Private Repo (Excluding config.json)
+      - name: Zip Private Repo
+        run: |
+          cd private-repo
+          zip -r ../repo.zip . -x "config.json"
+          cd ..
 
+      # Step 12: Generate Unique Blob Name with Timestamp
       - name: Generate File Name with Timestamp
         run: |
           TIMESTAMP=$(date +%s)
           echo "BLOB_NAME=repo_$TIMESTAMP.zip" >> $GITHUB_ENV
 
-      - name: Upload to Azure Blob with Authentication
+      # Step 13: Upload to Configurable Azure Blob Storage
+      - name: Upload to Azure Blob
         run: |
           az storage blob upload \
             --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
             --account-key "$STORAGE_KEY" \
-            --container-name mycontainer \
+            --container-name "${{ env.AZURE_CONTAINER_NAME }}" \
             --file repo.zip \
             --name "${{ env.BLOB_NAME }}" \
             --overwrite true
+
+      # Step 14: Cleanup Zip File
+      - name: Cleanup
+        run: rm repo.zip
