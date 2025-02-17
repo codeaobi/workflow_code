@@ -1,113 +1,98 @@
-name: Sync Selected Directories Between Private Repos
+name: Check & Upload to Azure Storage
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Runs every hour
-  workflow_dispatch:  # Allows manual trigger
-
-permissions:
-  contents: write
-  actions: write
-  deployments: read
-  repository-projects: read
-  statuses: read
+    - cron: "0 0 * * *"  # Runs every 24 hours at midnight UTC
+  workflow_dispatch:  # Allows manual execution
 
 jobs:
-  sync-repo:
+  check-create-upload:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout Private Repository A (Source)
-    - name: Checkout Source Repository (Repo A)
-      uses: actions/checkout@v3
-      with:
-        repository: org-name/private-repo-A  # Update with correct repo A
-        token: ${{ secrets.PAT_FOR_REPO_A }}
-        path: source-repo
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    # Step 2: Checkout Private Repository B (Destination)
-    - name: Checkout Destination Repository (Repo B)
-      uses: actions/checkout@v3
-      with:
-        repository: org-name/private-repo-B  # Update with correct repo B
-        token: ${{ secrets.PAT_FOR_REPO_B }}
-        ref: main  # Adjust to the correct branch
-        path: destination-repo
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-    # Step 3: Load Configuration File
-    - name: Load Subdirectories Configuration
-      id: load-config
-      run: |
-        CONFIG_FILE="destination-repo/sync-config.json"
-        if [ ! -f "$CONFIG_FILE" ]; then
-          echo "Configuration file not found!"
-          exit 1
-        fi
-        jq -r '.subdirectories[]' "$CONFIG_FILE" > subdirectories.txt
-      shell: bash
+      - name: Read Config File
+        run: |
+          STORAGE_ACCOUNT=$(jq -r '.AZURE_STORAGE_ACCOUNT' config.json)
+          LOCATION=$(jq -r '.AZURE_LOCATION' config.json)
+          echo "AZURE_STORAGE_ACCOUNT=$STORAGE_ACCOUNT" >> $GITHUB_ENV
+          echo "AZURE_LOCATION=$LOCATION" >> $GITHUB_ENV
 
-    # Step 4: Fetch latest commit hashes for specific subdirectories in Repo A
-    - name: Fetch Latest Commit Hashes
-      id: fetch-hashes
-      run: |
-        cd source-repo
-        while IFS= read -r SUBDIR; do
-          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
-          HASH=$(git log -n 1 --pretty=format:"%H" -- "$SUBDIR" || echo "NO_COMMIT")
-          echo "${SANITIZED_NAME}=$HASH" >> $GITHUB_ENV
-        done < ../subdirectories.txt
-      shell: bash
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
-    # Step 5: Compare hashes, create missing directories, and detect changes
-    - name: Check for New Commits and Ensure Directories Exist
-      id: check-commits
-      run: |
-        cd destination-repo
-        mkdir -p hashes
-        CHANGES_DETECTED=false
-        while IFS= read -r SUBDIR; do
-          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
-          SOURCE_HASH=$(printenv "$SANITIZED_NAME")
-          DEST_HASH=$(cat hashes/"$SANITIZED_NAME".hash 2>/dev/null || echo "NO_COMMIT")
-          DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
-          echo "Subdirectory: $DIR_NAME"
-          echo "Source Repo Hash: $SOURCE_HASH"
-          echo "Destination Repo Hash: $DEST_HASH"
+      - name: Set Correct Azure Subscription
+        run: |
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-          # Ensure directory exists
-          if [ ! -d "$DIR_NAME" ]; then
-            echo "Directory $DIR_NAME does not exist. Creating it."
-            mkdir -p "$DIR_NAME"
+      - name: Debug Azure Account & Storage
+        run: |
+          az account show
+          az storage account list --query "[].{name:name}" --output table
+
+      - name: Check if Storage Account Exists
+        id: check_storage
+        run: |
+          STORAGE_ACCOUNT_EXISTS=$(az storage account list --query "[?name=='${{ env.AZURE_STORAGE_ACCOUNT }}'].name" --output tsv)
+          if [[ -z "$STORAGE_ACCOUNT_EXISTS" ]]; then
+            echo "Storage account does NOT exist."
+            echo "storage_exists=false" >> $GITHUB_ENV
+          else
+            echo "Storage account exists."
+            echo "storage_exists=true" >> $GITHUB_ENV
           fi
 
-          # Check for changes
-          if [ "$SOURCE_HASH" != "$DEST_HASH" ]; then
-            echo "Hash mismatch for $DIR_NAME. Changes detected."
-            CHANGES_DETECTED=true
-          fi
-        done < ../subdirectories.txt
+      - name: Create Storage Account (If Not Exists)
+        if: env.storage_exists == 'false'
+        run: |
+          az storage account create \
+            --name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --location "${{ env.AZURE_LOCATION }}" \
+            --sku Standard_LRS
+          echo "Storage Account Created!"
 
-        echo "changes_detected=$CHANGES_DETECTED" >> $GITHUB_ENV
-      shell: bash
+      - name: Get Storage Account Key
+        id: get_storage_key
+        run: |
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "[0].value" --output tsv)
+          echo "::add-mask::$STORAGE_KEY"  # Mask the key in logs for security
+          echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
 
-    # Step 6: Sync changes (only if new commits are detected)
-    - name: Sync Changes
-      if: env.changes_detected == 'true'
-      run: |
-        cd destination-repo
-        while IFS= read -r SUBDIR; do
-          SANITIZED_NAME=$(echo "$SUBDIR" | tr '/' '_' | tr ' ' '_')  # Sanitize name
-          SOURCE_HASH=$(printenv "$SANITIZED_NAME")
-          DIR_NAME=$(basename "$SUBDIR")  # Extract directory name
-          rsync -av --delete --exclude='.git' ../source-repo/"$SUBDIR"/ "$DIR_NAME"/
-          mkdir -p $(dirname hashes/"$SANITIZED_NAME".hash)
-          echo "$SOURCE_HASH" > hashes/"$SANITIZED_NAME".hash
-        done < ../subdirectories.txt
+      - name: Create Blob Container (If Not Exists) with Authentication
+        run: |
+          az storage container create \
+            --name mycontainer \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+            --account-key "$STORAGE_KEY"
 
-        # Commit and push changes
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add .
-        git commit -m "Sync selected directories with latest updates from Repo A" || echo "No changes to commit"
-        git push origin main  # Adjust to your branch name
-      shell: bash
+      - name: Zip Repository
+        run: zip -r repo.zip .
+
+      - name: Generate File Name with Timestamp
+        run: |
+          TIMESTAMP=$(date +%s)
+          echo "BLOB_NAME=repo_$TIMESTAMP.zip" >> $GITHUB_ENV
+
+      - name: Upload to Azure Blob with Authentication
+        run: |
+          az storage blob upload \
+            --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+            --account-key "$STORAGE_KEY" \
+            --container-name mycontainer \
+            --file repo.zip \
+            --name "${{ env.BLOB_NAME }}" \
+            --overwrite true
